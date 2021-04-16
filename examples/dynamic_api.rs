@@ -3,7 +3,7 @@
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::APIResourceList;
 use kube::{
-    api::{Api, DynamicObject, GroupVersionKind, ResourceExt},
+    api::{Api, ApiResource, DynamicObject, ResourceExt},
     Client,
 };
 use log::{info, warn};
@@ -54,15 +54,15 @@ async fn print_group(
         if !ar.verbs.contains(&"list".to_string()) {
             continue;
         }
-        let gvk = GroupVersionKind::from_api_resource(&ar, &apis.group_version);
+        let api_resource = ApiResource::from_apiresource(&ar, &apis.group_version);
         let api: Api<DynamicObject> = if ar.namespaced {
             if let Some(ns) = ns_filter {
-                Api::namespaced_with(client.clone(), ns, &gvk)
+                Api::namespaced_with(client.clone(), ns, &api_resource)
             } else {
-                Api::all_with(client.clone(), &gvk)
+                Api::all_with(client.clone(), &api_resource)
             }
         } else {
-            Api::all_with(client.clone(), &gvk)
+            Api::all_with(client.clone(), &api_resource)
         };
 
         let list = api.list(&Default::default()).await?;
