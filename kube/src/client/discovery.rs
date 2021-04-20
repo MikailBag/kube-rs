@@ -1,19 +1,32 @@
-use crate::{api::GroupVersionKind, Client};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{APIResource, APIResourceList};
+mod resource_details;
+
+pub use resource_details::{ApiResourceExtras, Operations, Scope};
+
+use crate::{api::ApiResource, Client};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{APIResourceList};
 use std::{cmp::Reverse, collections::HashMap};
 
 struct GroupVersionData {
     version: String,
-    list: APIResourceList,
-    resources: Vec<APIResource>,
+    resources: Vec<(ApiResource, ApiResourceExtras)>,
 }
 
 impl GroupVersionData {
     fn new(version: String, list: APIResourceList) -> Self {
+        // TODO: can be better than O(N^2)
+        let mut resources = Vec::new();
+        for ar in &list.resources {
+            if ar.name.contains('/') {
+                // skip subresources
+                continue;
+            }
+            let api_resource = ApiResource::from_apiresource(ar, &list.group_version);
+            let extras = ApiResourceExtras::from_apiresourcelist(&list, &ar.name);
+            resources.push((api_resource, extras));
+        }
         GroupVersionData {
             version,
-            list: list.clone(),
-            resources: filter_api_resource_list(list),
+            resources,
         }
     }
 }
@@ -32,13 +45,6 @@ pub struct Group {
 /// interface on the top of that information.
 pub struct Discovery {
     groups: HashMap<String, Group>,
-}
-
-fn filter_api_resource_list(resource_list: APIResourceList) -> Vec<APIResource> {
-    let mut resource_list = resource_list.resources;
-    // skip subresources
-    resource_list.retain(|ar| !ar.name.contains('/'));
-    resource_list
 }
 
 // TODO: this is pretty unoptimized
@@ -125,22 +131,13 @@ impl Discovery {
         group: &str,
         version: &str,
         kind: &str,
-    ) -> Option<(GroupVersionKind, APIResource)> {
+    ) -> Option<(ApiResource, ApiResourceExtras)> {
         // TODO: could be better than O(N)
         let group = self.group(group)?;
         group
             .resources_by_version(version)
             .into_iter()
-            .find(|gvk| gvk.kind == kind)
-            .map(|gvk| {
-                let data = group
-                    .versions_and_resources
-                    .iter()
-                    .find(|data| data.version == version)
-                    .unwrap();
-                let raw = data.list.resources.iter().find(|r| r.kind == kind).unwrap();
-                (gvk, raw.clone())
-            })
+            .find(|(ar, _)| ar.kind == kind)
     }
 }
 
@@ -176,13 +173,13 @@ impl Group {
 
     /// Returns preferred version for working with given group.
     pub fn preferred_version(&self) -> Option<&str> {
-       self.preferred_version.as_deref()
+        self.preferred_version.as_deref()
     }
 
     /// Returns preferred version for working with given group.
     /// If server does not recommend one, this function picks
     /// "the most stable and the most recent" version.
-    
+
     pub fn preferred_version_or_guess(&self) -> &str {
         match &self.preferred_version {
             Some(v) => v,
@@ -193,28 +190,14 @@ impl Group {
     /// Returns resources available in version `ver` of this group.
     /// If the group does not support this version,
     /// returns empty vector.
-    pub fn resources_by_version(&self, ver: &str) -> Vec<GroupVersionKind> {
-        let resources = self
+    pub fn resources_by_version(&self, ver: &str) -> Vec<(ApiResource, ApiResourceExtras)> {
+        let resources: &[(ApiResource, ApiResourceExtras)] = self
             .versions_and_resources
             .iter()
             .find(|ver_data| ver_data.version == ver)
             .map(|ver_data| ver_data.resources.as_slice())
             .unwrap_or(&[]);
-        resources
-            .iter()
-            .cloned()
-            .map(|mut api_resource| {
-                api_resource.group = Some(if self.name == "core" {
-                    String::new()
-                } else {
-                    self.name.clone()
-                });
-                api_resource.version = Some(ver.to_string());
-                // second argument will be ignored because we have just filled necessary
-                // `api_resource` fields.
-                GroupVersionKind::from_api_resource(&api_resource, "unused/v0")
-            })
-            .collect()
+        resources.to_vec()
     }
 }
 

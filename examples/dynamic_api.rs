@@ -2,8 +2,8 @@
 //! to `kubectl get all --all-namespaces`.
 
 use kube::{
-    api::{Api, DynamicObject, Resource, ResourceExt},
-    client::Discovery,
+    api::{Api, DynamicObject, ResourceExt},
+    client::{Discovery, Scope},
     Client,
 };
 use log::{info, warn};
@@ -23,22 +23,18 @@ async fn main() -> anyhow::Result<()> {
 
     for group in discovery.groups() {
         let ver = group.preferred_version_or_guess();
-        for gvk in group.resources_by_version(ver) {
-            let kind = DynamicObject::kind(&gvk);
-            let (_, raw_resource) = discovery
-                .resolve_group_version_kind(group.name(), ver, &kind)
-                .unwrap();
-            let api: Api<DynamicObject> = if raw_resource.namespaced {
+        for (res, extras) in group.resources_by_version(ver) {
+            let api: Api<DynamicObject> = if let Scope::Namespaced = extras.scope {
                 if let Some(ns) = &ns_filter {
-                    Api::namespaced_with(client.clone(), ns, &gvk)
+                    Api::namespaced_with(client.clone(), ns, &res)
                 } else {
-                    Api::all_with(client.clone(), &gvk)
+                    Api::all_with(client.clone(), &res)
                 }
             } else {
-                Api::all_with(client.clone(), &gvk)
+                Api::all_with(client.clone(), &res)
             };
 
-            info!("{}/{} : {}", group.name(), ver, kind);
+            info!("{}/{} : {}", group.name(), ver, res.kind);
 
             let list = match api.list(&Default::default()).await {
                 Ok(l) => l,
